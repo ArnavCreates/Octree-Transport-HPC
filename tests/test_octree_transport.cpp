@@ -12,8 +12,24 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <cstdio>
 
 using namespace transport;
+
+bool hasOpenGL46Context(const GpuComputeEngine& gpu) {
+    if (!gpu.isInitialized()) return false;
+
+    const std::string renderer = gpu.getRendererInfo();
+    const size_t version_start = renderer.rfind("GL ");
+    if (version_start == std::string::npos) return false;
+
+    int major = 0;
+    int minor = 0;
+    if (std::sscanf(renderer.c_str() + version_start + 3, "%d.%d", &major, &minor) != 2) {
+        return false;
+    }
+    return major > 4 || (major == 4 && minor >= 6);
+}
 
 #define CREATE_GPU_OR_SKIP(gpu_name) \
     std::unique_ptr<GpuComputeEngine> gpu_name; \
@@ -22,12 +38,14 @@ using namespace transport;
     } catch (const std::exception& ex) { \
         const std::string message = ex.what(); \
         if (message.find("OpenGL context unavailable") != std::string::npos) { \
-            GTEST_SKIP() << "Skipping GPU compute shader assertions: no OpenGL 4.3+ context available on this headless host"; \
+            GTEST_SKIP() << "Skipping GPU compute shader assertions: OpenGL 4.6 compute context unavailable (" << message << ")"; \
         } \
         throw; \
     } \
     if (!gpu_name->isInitialized()) \
-        GTEST_SKIP() << "Skipping GPU compute shader assertions: no OpenGL 4.3+ context available on this headless host"
+        GTEST_SKIP() << "Skipping GPU compute shader assertions: OpenGL 4.6 compute context unavailable"; \
+    if (!hasOpenGL46Context(*gpu_name)) \
+        GTEST_SKIP() << "Skipping GPU compute shader assertions: OpenGL 4.6 compute context unavailable; detected " << gpu_name->getRendererInfo()
 
 // 1. CliConfigParsingTest
 TEST(OctreeTransportTest, CliConfigParsingTest) {
