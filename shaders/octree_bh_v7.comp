@@ -1,0 +1,67 @@
+#version 430 core
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+uniform int numParticles;
+uniform float squaredSoftening;
+uniform float G;
+uniform float theta;
+
+struct FlatOctreeNode {
+    vec4 com_mass;          // xyz = center of mass, w = total mass M
+    vec4 bbox_center_half;  // xyz = cell center, w = cell half-width s/2
+    int first_child_idx;    // -1 if leaf
+    int next_node_idx;      // stackless skip-rope index (-1 = traversal end)
+    int particle_idx;       // >= 0 single particle, -2 coincident/aggregated, -1 internal
+    int depth;
+};
+
+layout(std430, binding = 0) readonly buffer PositionsBuffer {
+    vec4 pos_mass[];
+};
+
+layout(std430, binding = 1) writeonly buffer AccelerationsBuffer {
+    vec4 acc_pad[];
+};
+
+layout(std430, binding = 2) readonly buffer OctreeBuffer {
+    FlatOctreeNode octreeNodes[];
+};
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= uint(numParticles)) return;
+
+    vec3 pi = pos_mass[i].xyz;
+    vec3 acc = vec3(0.0);
+    float theta_sq = theta * theta;
+
+    int curr = 0; // Start traversal at tree root
+    while (curr >= 0) {
+        FlatOctreeNode node = octreeNodes[curr];
+        if (node.com_mass.w <= 0.0) {
+            curr = node.next_node_idx;
+            continue;
+        }
+
+        vec3 dr = node.com_mass.xyz - pi;
+        float dist_sq = dot(dr, dr);
+        float s = node.bbox_center_half.w * 2.0;
+        bool is_leaf = (node.first_child_idx < 0);
+
+        // Multipole acceptance criterion: s^2 < theta^2 * dist_sq
+        if (is_leaf || (s * s < theta_sq * dist_sq)) {
+            if (dist_sq > 0.0) {
+                float eff_dist_sq = dist_sq + squaredSoftening;
+                float inv_dist = inversesqrt(eff_dist_sq);
+                float inv_dist3 = inv_dist * inv_dist * inv_dist;
+                acc += dr * (G * node.com_mass.w * inv_dist3);
+            }
+            curr = node.next_node_idx;
+        } else {
+            curr = node.first_child_idx;
+        }
+    }
+
+    acc_pad[i] = vec4(acc, 0.0);
+}

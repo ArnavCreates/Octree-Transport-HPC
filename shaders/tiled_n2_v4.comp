@@ -1,0 +1,57 @@
+#version 430 core
+
+#define TILE_SIZE 256
+
+layout(local_size_x = TILE_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+uniform int numParticles;
+uniform float squaredSoftening;
+uniform float G;
+
+layout(std430, binding = 0) readonly buffer PositionsBuffer {
+    vec4 pos_mass[];
+};
+
+layout(std430, binding = 1) writeonly buffer AccelerationsBuffer {
+    vec4 acc_pad[];
+};
+
+shared vec4 tile_pos_mass[TILE_SIZE];
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    vec3 pi = (i < uint(numParticles)) ? pos_mass[i].xyz : vec3(0.0);
+    vec3 acc = vec3(0.0);
+
+    uint numTiles = (uint(numParticles) + TILE_SIZE - 1) / TILE_SIZE;
+
+    for (uint t = 0; t < numTiles; ++t) {
+        uint loadIdx = t * TILE_SIZE + gl_LocalInvocationID.x;
+        if (loadIdx < uint(numParticles)) {
+            tile_pos_mass[gl_LocalInvocationID.x] = pos_mass[loadIdx];
+        } else {
+            tile_pos_mass[gl_LocalInvocationID.x] = vec4(0.0);
+        }
+
+        barrier();
+
+        if (i < uint(numParticles)) {
+            for (uint k = 0; k < TILE_SIZE; ++k) {
+                uint global_j = t * TILE_SIZE + k;
+                if (global_j == i || global_j >= uint(numParticles)) continue;
+
+                vec3 r = tile_pos_mass[k].xyz - pi;
+                float dist_sq = dot(r, r) + squaredSoftening;
+                float inv_dist = inversesqrt(dist_sq);
+                float inv_dist3 = inv_dist * inv_dist * inv_dist;
+                acc += r * (G * tile_pos_mass[k].w * inv_dist3);
+            }
+        }
+
+        barrier();
+    }
+
+    if (i < uint(numParticles)) {
+        acc_pad[i] = vec4(acc, 0.0);
+    }
+}
